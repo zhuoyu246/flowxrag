@@ -4,6 +4,8 @@
 
 前端使用 Streamlit 构建交互式控制台，后端使用 FastAPI 提供文档管理、检索、重排、流式问答和健康检查接口。系统默认使用 OpenAI 兼容接口调用 DeepSeek 等大模型，也可以接入 OpenAI 兼容的 embedding / rerank 服务。
 
+![NexusRAG 智能知识中枢控制台](docs/images/nexusrag-console.png)
+
 ## 核心功能
 
 - PDF 文档上传、解析、切分、入库和删除
