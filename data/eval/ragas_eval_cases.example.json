@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "id": "paper_overview",
+      "question": "这篇论文主要讲了什么？",
+      "reference": "论文提出 PhysGated-LSTM 用于超短期光伏功率预测。它用 CPO 识别双二极管模型参数，并将物理参数映射到 LSTM 门控单元，让神经网络记忆流受到物理机制调制，从而提升强辐照波动场景下的泛化能力。"
+    },
+    {
+      "id": "core_innovation",
+      "question": "这篇论文的核心创新是什么？",
+      "reference": "核心创新是 Physics-Embedded Gated LSTM/PhysGated 架构：不是简单拼接物理特征，而是把双二极管模型参数嵌入 LSTM gates，并结合一致性损失和物理残差调制来抑制预测误差。"
+    },
+    {
+      "id": "experiment_result",
+      "question": "这篇论文的实验结果怎么样？",
+      "reference": "实验显示模型在 30 分钟预测中达到 R2=0.936，相比基线 RMSE 降低 18.18%，MAE 降低 23.81%。在快速辐照突变等极端条件下，模型保持 R2=0.992，高于基线 0.876，减少相位滞后和非物理过冲。"
+    }
+  ]
+}

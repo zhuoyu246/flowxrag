@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+streamlit
+langgraph
+langchain
+langchain-openai
+langchain-community
+tiktoken
+tavily-python
+pydantic
+faiss-cpu
+python-dotenv
+pypdf
+sse-starlette
+python-multipart
+numpy
+requests
