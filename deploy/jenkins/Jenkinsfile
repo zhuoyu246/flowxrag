@@ -1,0 +1,60 @@
+pipeline {
+  agent { label 'docker-go-python-kubectl' }
+  options { timestamps(); disableConcurrentBuilds() }
+  environment {
+    IMAGE_TAG = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(12) : env.BUILD_NUMBER}"
+    REGISTRY = "${env.HARBOR_REGISTRY}"
+    NAMESPACE = "${env.BRANCH_NAME == 'main' ? 'rag-production' : 'rag-staging'}"
+  }
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+    stage('Go CI') {
+      steps {
+        sh 'chmod +x deploy/jenkins/static-check.sh && deploy/jenkins/static-check.sh'
+        sh 'cd gateway && go test ./...'
+        sh 'cd sync-service && go test ./...'
+      }
+    }
+    stage('Python CI') {
+      steps { sh 'chmod +x deploy/jenkins/pytest-run.sh && deploy/jenkins/pytest-run.sh' }
+      post { always { junit allowEmptyResults: true, testResults: 'pytest.xml'; archiveArtifacts allowEmptyArchive: true, artifacts: 'coverage.xml' } }
+    }
+    stage('Docker Build') {
+      steps {
+        sh 'docker build -f deploy/Dockerfile-gateway -t $REGISTRY/rag/gateway:$IMAGE_TAG .'
+        sh 'docker build -f deploy/Dockerfile-sync -t $REGISTRY/rag/sync-service:$IMAGE_TAG .'
+        sh 'docker build -f deploy/Dockerfile-rag -t $REGISTRY/rag/rag-service:$IMAGE_TAG .'
+      }
+    }
+    stage('Harbor Push') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'harbor-registry', usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASSWORD')]) {
+          sh 'echo "$HARBOR_PASSWORD" | docker login "$REGISTRY" --username "$HARBOR_USER" --password-stdin'
+          sh 'for image in gateway sync-service rag-service; do docker push "$REGISTRY/rag/$image:$IMAGE_TAG"; done'
+        }
+      }
+    }
+    stage('Kubernetes Deploy') {
+      steps {
+        withCredentials([file(credentialsId: 'kubeconfig-rag', variable: 'KUBECONFIG_FILE')]) {
+          sh 'export KUBECONFIG="$KUBECONFIG_FILE"; kubectl apply -n "$NAMESPACE" -f deploy/k8s/configmap.yaml -f deploy/k8s/svc.yaml -f deploy/k8s/gateway-deploy.yaml -f deploy/k8s/sync-deploy.yaml -f deploy/k8s/rag-deploy.yaml'
+          sh 'export KUBECONFIG="$KUBECONFIG_FILE"; kubectl set image -n "$NAMESPACE" deployment/gateway gateway="$REGISTRY/rag/gateway:$IMAGE_TAG"; kubectl set image -n "$NAMESPACE" deployment/sync-service sync-service="$REGISTRY/rag/sync-service:$IMAGE_TAG"; kubectl set image -n "$NAMESPACE" deployment/rag-service rag-service="$REGISTRY/rag/rag-service:$IMAGE_TAG"'
+        }
+      }
+    }
+    stage('Deployment Verification') {
+      steps {
+        withCredentials([file(credentialsId: 'kubeconfig-rag', variable: 'KUBECONFIG_FILE')]) {
+          sh 'export KUBECONFIG="$KUBECONFIG_FILE"; kubectl rollout status -n "$NAMESPACE" deployment/gateway --timeout=180s; kubectl rollout status -n "$NAMESPACE" deployment/sync-service --timeout=180s; kubectl rollout status -n "$NAMESPACE" deployment/rag-service --timeout=300s'
+        }
+      }
+    }
+  }
+  post {
+    failure {
+      withCredentials([file(credentialsId: 'kubeconfig-rag', variable: 'KUBECONFIG_FILE')]) {
+        sh 'export KUBECONFIG="$KUBECONFIG_FILE"; kubectl rollout undo -n "$NAMESPACE" deployment/gateway || true; kubectl rollout undo -n "$NAMESPACE" deployment/sync-service || true; kubectl rollout undo -n "$NAMESPACE" deployment/rag-service || true'
+      }
+    }
+  }
+}

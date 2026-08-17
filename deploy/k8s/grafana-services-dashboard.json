@@ -1,0 +1,9 @@
+{
+  "title": "Microservices",
+  "schemaVersion": 39,
+  "panels": [
+    {"type":"timeseries","title":"HTTP and gRPC QPS","targets":[{"expr":"sum(rate(rag_requests_total[5m]))"},{"expr":"sum(rate(grpc_requests_total[5m]))"}]},
+    {"type":"timeseries","title":"Container CPU","targets":[{"expr":"sum(rate(container_cpu_usage_seconds_total{container=~\"gateway|sync-service|rag-service\"}[5m])) by (container)"}]},
+    {"type":"timeseries","title":"Container memory","targets":[{"expr":"sum(container_memory_working_set_bytes{container=~\"gateway|sync-service|rag-service\"}) by (container)"}]}
+  ]
+}

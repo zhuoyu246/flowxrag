@@ -10,6 +10,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
 from backend.retriever import SearchResult, bm25_tokenize, knowledge_base
+from backend.core.metrics import METRICS
 
 
 Route = Literal["auto", "local", "web", "model"]
@@ -19,6 +20,8 @@ class GraphState(TypedDict):
     """State object passed between LangGraph nodes."""
 
     question: str
+    history_context: str
+    memory_context: str
     generation: str
     route: Route
     web_fallback: bool
@@ -52,9 +55,11 @@ llm = ChatOpenAI(
 )
 
 
-def initial_state(question: str) -> GraphState:
+def initial_state(question: str, history_context: str = "", memory_context: str = "") -> GraphState:
     return {
         "question": question,
+        "history_context": history_context,
+        "memory_context": memory_context,
         "generation": "",
         "route": "auto",
         "web_fallback": False,
@@ -69,16 +74,23 @@ def invoke_llm(prompt: str):
     """DeepSeek call helper with simple retry for temporary gateway errors."""
     last_error = None
     for attempt in range(3):
+        started = time.perf_counter()
         try:
-            return llm.invoke(prompt)
+            response = llm.invoke(prompt)
+            METRICS.llm_requests_total.labels(MODEL_NAME, "success").inc()
+            return response
         except Exception as exc:
             last_error = exc
+            METRICS.llm_requests_total.labels(MODEL_NAME, "error").inc()
+            METRICS.llm_errors_total.labels(MODEL_NAME).inc()
             message = str(exc).lower()
             transient = any(code in message for code in ("502", "503", "504", "timeout", "temporarily"))
             if attempt < 2 and transient:
                 time.sleep(1.5 * (attempt + 1))
                 continue
             raise
+        finally:
+            METRICS.rag_llm_duration_seconds.labels(MODEL_NAME).observe(time.perf_counter() - started)
     raise RuntimeError(f"DeepSeek call failed after retries: {last_error}")
 
 
@@ -474,11 +486,16 @@ def web_search(state: GraphState):
 # -----------------------------
 def direct_answer(state: GraphState):
     question = state["question"]
+    personalization = _personalization_block(
+        state.get("history_context", ""),
+        state.get("memory_context", ""),
+    )
     state["steps"].append("直接回答：使用通用模型能力")
     prompt = (
         "你是一个自然、可靠的中文助手。请直接回答用户问题。\n"
         "如果问题明显需要实时信息，但没有联网搜索结果，请提醒用户需要联网查询。\n"
         "回答要像 ChatGPT 一样自然，不要提及内部路由、工具链或调试过程。\n\n"
+        f"{personalization}"
         f"问题：{question}"
     )
     response = invoke_llm(prompt)
@@ -502,6 +519,10 @@ def generate(state: GraphState):
     """Final generation: DeepSeek answers with retrieved context."""
     question = state["question"]
     documents = state["documents"]
+    personalization = _personalization_block(
+        state.get("history_context", ""),
+        state.get("memory_context", ""),
+    )
     state["steps"].append("4. 答案生成：DeepSeek 基于检索上下文回答")
 
     context = "\n\n".join(
@@ -521,6 +542,7 @@ def generate(state: GraphState):
         "6. 如果用户问“这篇/这份文档讲什么、总结一下、主要内容”，请直接对本地文档做概览总结，不要回答成缺少论文内容。\n"
         "7. 如果上下文证据充足，回答应尽量完整；如果证据不足，要明确说明缺口，并给出下一步检索或补充材料建议。\n\n"
         f"推理摘要：\n{reasoning_summary}\n\n"
+        f"{personalization}"
         f"上下文：\n{context}\n\n"
         f"问题：{question}"
     )
@@ -556,6 +578,27 @@ def search_result_to_source(result: SearchResult) -> dict:
         "retrieval_score": result.retrieval_score,
         "type": "local",
     }
+
+
+def _personalization_block(history_context: str, memory_context: str) -> str:
+    blocks = []
+    if memory_context:
+        blocks.append(
+            "长期记忆（只用于个性化、偏好和称呼；不要把它当作事实证据）：\n"
+            f"{memory_context}"
+        )
+    if history_context:
+        blocks.append(
+            "最近会话（用于理解代词、省略和延续问题）：\n"
+            f"{history_context}"
+        )
+    if not blocks:
+        return ""
+    priority = (
+        "记忆使用规则：当前用户消息优先级最高；如果当前消息与长期记忆冲突，"
+        "以当前消息为准，并自然承认更新，不要被旧记忆误导。\n"
+    )
+    return priority + "\n\n".join(blocks) + "\n\n"
 
 
 def decide_after_route(state: GraphState):

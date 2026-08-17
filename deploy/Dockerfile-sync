@@ -1,0 +1,12 @@
+FROM golang:1.26-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY api/proto/ragpb/ ./api/proto/ragpb/
+COPY sync-service/ ./sync-service/
+RUN go mod download && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /sync-service ./sync-service/cmd/sync-service
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /sync-service /sync-service
+EXPOSE 8081
+USER nonroot:nonroot
+ENTRYPOINT ["/sync-service"]

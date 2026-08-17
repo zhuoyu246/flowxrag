@@ -1,0 +1,10 @@
+{
+  "title": "RAG Overview",
+  "schemaVersion": 39,
+  "panels": [
+    {"type": "timeseries", "title": "Gateway QPS", "targets": [{"expr": "sum(rate(rag_requests_total[5m]))"}]},
+    {"type": "timeseries", "title": "P95 request latency", "targets": [{"expr": "histogram_quantile(0.95, sum(rate(rag_request_duration_seconds_bucket[5m])) by (le))"}]},
+    {"type": "timeseries", "title": "Retrieval latency", "targets": [{"expr": "histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket[5m])) by (le,stage))"}]},
+    {"type": "timeseries", "title": "Kafka lag", "targets": [{"expr": "kafka_consumer_lag"}]}
+  ]
+}

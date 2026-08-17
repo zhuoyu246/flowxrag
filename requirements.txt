@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 streamlit
 langgraph
 langchain
@@ -8,6 +8,7 @@ langchain-community
 tiktoken
 tavily-python
 pydantic
+pydantic-settings
 faiss-cpu
 python-dotenv
 pypdf
@@ -15,3 +16,35 @@ sse-starlette
 python-multipart
 numpy
 requests
+
+# ── Phase 1: 工程基础 ──────────────────────────────────
+structlog                          # 结构化日志
+
+# ── Phase 2: 数据库 & 缓存 & 认证 ──────────────────────
+sqlalchemy[asyncio]>=2.0           # SQLAlchemy 2.0 异步 ORM
+asyncpg                            # PostgreSQL 异步驱动
+psycopg2-binary                    # PostgreSQL 同步驱动（Alembic/Celery 用）
+alembic                            # 数据库迁移
+redis[hiredis]                     # Redis 异步客户端
+python-jose[cryptography]          # JWT 生成 & 验证
+passlib[bcrypt]                    # 密码哈希
+bcrypt<5                           # passlib 1.7.4 与 bcrypt 5.x 不兼容
+email-validator                    # Pydantic EmailStr
+
+# ── Phase 3: 异步任务 & 消息队列 ───────────────────────
+celery[redis]                      # Celery + Redis 消息队列
+flower                             # Celery 任务监控 UI
+
+# ── Phase 4: 可观测性 & 监控 ────────────────────────────
+prometheus-fastapi-instrumentator  # HTTP 指标自动采集
+prometheus-client                  # Prometheus 客户端（自定义指标）
+grpcio>=1.71,<1.80
+grpcio-tools>=1.71,<1.80
+protobuf>=5,<7
+opentelemetry-api>=1.39,<2
+opentelemetry-sdk>=1.39,<2
+opentelemetry-exporter-otlp-proto-grpc>=1.39,<2
+opentelemetry-instrumentation-fastapi>=0.60b1,<1
+opentelemetry-instrumentation-grpc>=0.60b1,<1
+aiokafka>=0.12,<1
+aiomysql>=0.2,<1

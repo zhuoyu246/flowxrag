@@ -1,0 +1,9 @@
+{
+  "title": "RAG Retrieval",
+  "schemaVersion": 39,
+  "panels": [
+    {"type":"timeseries","title":"FAISS latency","targets":[{"expr":"histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket{stage=\"faiss\"}[5m])) by (le))"}]},
+    {"type":"timeseries","title":"BM25 latency","targets":[{"expr":"histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket{stage=\"bm25\"}[5m])) by (le))"}]},
+    {"type":"timeseries","title":"RRF latency","targets":[{"expr":"histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket{stage=\"rrf\"}[5m])) by (le))"}]}
+  ]
+}

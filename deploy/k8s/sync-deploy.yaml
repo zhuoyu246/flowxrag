@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sync-service
+  labels: { app: sync-service }
+spec:
+  replicas: 2
+  strategy: { type: RollingUpdate }
+  selector: { matchLabels: { app: sync-service } }
+  template:
+    metadata:
+      labels: { app: sync-service }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8081", prometheus.io/path: /metrics }
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: sync-service
+          image: harbor.example.com/rag/sync-service:REPLACE_WITH_TAG
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 8081 }]
+          envFrom: [{ configMapRef: { name: rag-config } }]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          startupProbe: { httpGet: { path: /health, port: http }, failureThreshold: 30, periodSeconds: 2 }
+          readinessProbe: { httpGet: { path: /ready, port: http }, initialDelaySeconds: 3, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 10, periodSeconds: 10 }

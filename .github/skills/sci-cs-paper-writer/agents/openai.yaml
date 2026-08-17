@@ -1,0 +1,4 @@
+interface:
+  display_name: "SCI CS Paper Writer"
+  short_description: "SCI paper workflow for CS manuscripts."
+  default_prompt: "Use $sci-cs-paper-writer to turn my computer-science research notes into a journal-ready manuscript plan with experiment and reviewer-risk checks."

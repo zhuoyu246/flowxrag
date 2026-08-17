@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: grafana-dashboard }
+data:
+  rag-overview.json: |
+    {"title":"RAG Overview","schemaVersion":39,"panels":[{"type":"timeseries","title":"QPS","targets":[{"expr":"sum(rate(rag_requests_total[5m]))"}]},{"type":"timeseries","title":"Kafka lag","targets":[{"expr":"kafka_consumer_lag"}]}]}
+  kafka.json: |
+    {"title":"Kafka","schemaVersion":39,"panels":[{"type":"timeseries","title":"Consumer lag","targets":[{"expr":"kafka_consumer_lag"}]},{"type":"timeseries","title":"DLQ","targets":[{"expr":"sum(rate(kafka_messages_total{outcome=\"dlq\"}[5m]))"}]}]}
+  retrieval.json: |
+    {"title":"RAG Retrieval","schemaVersion":39,"panels":[{"type":"timeseries","title":"FAISS latency","targets":[{"expr":"histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket{stage=\"faiss\"}[5m])) by (le))"}]}]}
+  services.json: |
+    {"title":"Microservices","schemaVersion":39,"panels":[{"type":"timeseries","title":"gRPC QPS","targets":[{"expr":"sum(rate(grpc_requests_total[5m]))"}]}]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: grafana-provisioning }
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: rag
+        type: file
+        options: { path: /var/lib/grafana/dashboards }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: grafana }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: grafana } }
+  template:
+    metadata: { labels: { app: grafana } }
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.1.1
+          ports: [{ name: http, containerPort: 3000 }]
+          volumeMounts:
+            - { name: dashboards, mountPath: /var/lib/grafana/dashboards }
+            - { name: provisioning-datasources, mountPath: /etc/grafana/provisioning/datasources/datasource.yml, subPath: datasources.yaml }
+            - { name: provisioning-dashboards, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml, subPath: dashboards.yaml }
+      volumes:
+        - { name: dashboards, configMap: { name: grafana-dashboard } }
+        - { name: provisioning-datasources, configMap: { name: grafana-provisioning } }
+        - { name: provisioning-dashboards, configMap: { name: grafana-provisioning } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: grafana }
+spec:
+  selector: { app: grafana }
+  ports: [{ name: http, port: 3000, targetPort: http }]

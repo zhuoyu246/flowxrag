@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import uuid
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
@@ -17,6 +18,8 @@ import faiss
 import numpy as np
 import requests
 from pypdf import PdfReader
+
+from backend.core.metrics import METRICS
 
 
 # RAG local storage. On the server, set CRAG_DATA_DIR to the data disk, for example:
@@ -683,6 +686,7 @@ class KnowledgeBase:
 
     def add_pdf(self, file_path: Path, source_name: str) -> dict:
         """Ingestion pipeline: parse PDF, create parent-child chunks, rebuild FAISS."""
+        index_started = time.perf_counter()
         reader = PdfReader(str(file_path))
         new_chunks = self._chunks_from_reader(reader, source_name)
 
@@ -691,11 +695,34 @@ class KnowledgeBase:
             self._save_chunks()
             self.index = self._rebuild_index()
 
+        METRICS.document_index_duration_seconds.observe(time.perf_counter() - index_started)
         return {
             "source": source_name,
             "pages": len(reader.pages),
             "chunks_added": len(new_chunks),
             "parent_chunks_added": len({chunk.parent_id for chunk in new_chunks}),
+            "total_chunks": len(self.chunks),
+        }
+
+    def upsert_pdf(self, file_path: Path, source_name: str) -> dict:
+        """Replace a source while retaining its shared uploaded PDF.
+
+        Kafka messages are at-least-once. Removing old chunks before adding the
+        parsed source makes INSERT/UPDATE retry-safe for the FAISS index.
+        """
+        index_started = time.perf_counter()
+        reader = PdfReader(str(file_path))
+        new_chunks = self._chunks_from_reader(reader, source_name)
+        with self._lock:
+            self.chunks = [chunk for chunk in self.chunks if chunk.source != source_name]
+            self.chunks.extend(new_chunks)
+            self._save_chunks()
+            self.index = self._rebuild_index()
+        METRICS.document_index_duration_seconds.observe(time.perf_counter() - index_started)
+        return {
+            "source": source_name,
+            "pages": len(reader.pages),
+            "chunks_added": len(new_chunks),
             "total_chunks": len(self.chunks),
         }
 
@@ -812,17 +839,23 @@ class KnowledgeBase:
 
     def search(self, query: str, top_k: int = 5, min_score: float = 0.08) -> List[SearchResult]:
         """Hybrid retrieval: FAISS dense search + BM25 sparse search + RRF fusion."""
+        started = time.perf_counter()
         with self._lock:
             if not self.chunks or self.index.ntotal == 0:
+                METRICS.retrieval_total.labels("empty").inc()
                 return []
             overview_results = self._overview_results(top_k) if DEFAULT_OVERVIEW_BOOST and is_document_overview_query(query) else []
             query_vector = self.embedding.embed([query])
             candidate_k = int(os.getenv("RETRIEVER_CANDIDATE_K", str(max(top_k * 8, top_k))))
             candidate_k = min(candidate_k, len(self.chunks))
+            vector_started = time.perf_counter()
             scores, indices = self.index.search(query_vector, candidate_k)
+            vector_duration = time.perf_counter() - vector_started
             bm25_candidate_k = int(os.getenv("BM25_CANDIDATE_K", str(candidate_k)))
             bm25_candidate_k = min(bm25_candidate_k, len(self.chunks))
+            bm25_started = time.perf_counter()
             bm25_hits = self.bm25.search(query, bm25_candidate_k)
+            bm25_duration = time.perf_counter() - bm25_started
             chunks = list(self.chunks)
 
         vector_hits: List[tuple[int, float]] = []
@@ -832,7 +865,11 @@ class KnowledgeBase:
                 continue
             vector_hits.append((int(index), score))
 
+        rrf_started = time.perf_counter()
         fused_scores = self._rrf_fuse(vector_hits, bm25_hits)
+        METRICS.retrieval_duration_seconds.labels("faiss").observe(vector_duration)
+        METRICS.retrieval_duration_seconds.labels("bm25").observe(bm25_duration)
+        METRICS.retrieval_duration_seconds.labels("rrf").observe(time.perf_counter() - rrf_started)
         parent_hits: dict[str, SearchResult] = {}
         for index, fused_score in sorted(fused_scores.items(), key=lambda item: item[1], reverse=True):
             if index < 0 or index >= len(chunks):
@@ -852,7 +889,10 @@ class KnowledgeBase:
 
         results = sorted(parent_hits.values(), key=lambda result: result.score, reverse=True)
         results = self._merge_search_results(overview_results, results, top_k)
-        return self.reranker.rerank(query, results, top_k)
+        final = self.reranker.rerank(query, results, top_k)
+        METRICS.retrieval_total.labels("ok").inc()
+        METRICS.retrieval_duration_seconds.labels("total").observe(time.perf_counter() - started)
+        return final
 
     def _overview_results(self, top_k: int) -> List[SearchResult]:
         parent_chunks: dict[str, Chunk] = {}
@@ -951,6 +991,7 @@ class KnowledgeBase:
                 }
             )
         return {
+            "vector_store": "faiss",
             "chunks": len(self.chunks),
             "parent_chunks": parent_count,
             "chunking_strategy": CHUNKING_STRATEGY,

@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - configmap.yaml
+  - secret.yaml
+  - svc.yaml
+  - gateway-deploy.yaml
+  - rag-deploy.yaml
+  - sync-deploy.yaml
+  - hpa.yaml
+  - otel-collector.yaml
+  - jaeger-collector.yaml
+  - prometheus.yaml
+  - grafana.yaml

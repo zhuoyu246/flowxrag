@@ -1,0 +1,21 @@
+FROM python:3.11-slim AS builder
+WORKDIR /build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ libpq-dev && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM python:3.11-slim AS runtime
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 curl && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /install /usr/local
+COPY backend/ ./backend/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
+COPY rag-service/ ./rag-service/
+COPY api/proto/ ./api/proto/
+COPY deploy/rag-entrypoint.sh ./deploy/rag-entrypoint.sh
+RUN useradd --create-home --uid 1000 appuser && mkdir -p /app/data/uploads /app/data/indexes /app/data/evaluations && chown -R appuser:appuser /app && chmod 0555 /app/deploy/rag-entrypoint.sh
+USER appuser
+EXPOSE 8000 50051 9090
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD curl --fail http://localhost:8000/health || exit 1
+CMD ["/app/deploy/rag-entrypoint.sh"]

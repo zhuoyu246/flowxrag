@@ -1,0 +1,137 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: crag
+      POSTGRES_USER: crag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crag -d crag"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # PostgreSQL remains the original application's account/history database.
+  # MySQL is the document-index CDC source consumed by Canal.
+  mysql:
+    image: mysql:8.0.39
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root-local-only}
+      MYSQL_DATABASE: rag_cdc
+    command: ["--default-time-zone=+00:00"]
+    volumes:
+      - mysqldata:/var/lib/mysql
+      - ./mysql/my.cnf:/etc/mysql/conf.d/cdc.cnf:ro
+      - ./mysql/init/01-cdc.sql:/docker-entrypoint-initdb.d/01-cdc.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  canal:
+    image: canal/canal-server:v1.1.8
+    # The official image runs as `admin`; named volumes start root-owned.
+    # Initialize ownership before the image drops privileges to `admin`.
+    user: "0:0"
+    entrypoint: ["/bin/bash", "-lc", "chown -R admin:admin /home/admin/canal-data && exec /alidata/bin/main.sh /home/admin/app.sh"]
+    depends_on:
+      mysql: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    volumes:
+      - ./canal_conf/canal.properties:/home/admin/canal-server/conf/canal.properties:ro
+      - ./canal_conf/example/instance.properties:/home/admin/canal-server/conf/example/instance.properties:ro
+      - canaldata:/home/admin/canal-data
+
+  kafka:
+    image: apache/kafka:3.8.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  rag-service:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile-rag
+    env_file: ["../.env"]
+    environment:
+      CRAG_DATA_DIR: /app/data
+      VECTOR_STORE: faiss
+      DATABASE_URL: postgresql+asyncpg://crag:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/crag
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MYSQL_CDC_ENABLED: "true"
+      MYSQL_CDC_DATABASE_URL: mysql+aiomysql://rag_cdc:rag-cdc-local-only@mysql:3306/rag_cdc
+      OTEL_ENABLED: "false"
+    volumes: ["../data:/app/data"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      mysql: { condition: service_healthy }
+    ports: ["8000:8000", "50051:50051"]
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile-gateway
+    environment:
+      RAG_GRPC_ADDR: rag-service:50051
+      RAG_HTTP_URL: http://rag-service:8000
+      REDIS_URL: redis://redis:6379/0
+      REQUIRE_AUTH: "false"
+      RATE_LIMIT: 100
+      OTEL_ENABLED: "false"
+    depends_on: [rag-service, redis]
+    ports: ["8080:8080"]
+
+  sync-service:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile-sync
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_DOCUMENT_TOPIC: rag-document-change
+      KAFKA_DOCUMENT_DLQ_TOPIC: rag-document-dlq
+      REDIS_URL: redis://redis:6379/0
+      RAG_GRPC_ADDR: rag-service:50051
+      OTEL_ENABLED: "false"
+    depends_on: [kafka, redis, rag-service]
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: Dockerfile.frontend
+    environment: { BACKEND_URL: http://gateway:8080 }
+    depends_on: [gateway]
+    ports: ["8501:8501"]
+
+volumes:
+  pgdata:
+  mysqldata:
+  canaldata:

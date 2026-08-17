@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package crag.rag.v1;
+
+option go_package = "github.com/example/crag-expert-system/api/proto/ragpb;ragpb";
+
+service RagService {
+  rpc Chat(ChatRequest) returns (ChatResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc IndexDocument(IndexDocumentRequest) returns (IndexDocumentResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message ChatRequest {
+  string question = 1;
+  int64 session_id = 2;
+  string user_id = 3;
+}
+
+message ChatResponse {
+  string answer = 1;
+  repeated string agent_trace = 2;
+  bool trigger_web_fallback = 3;
+  repeated Source sources = 4;
+  repeated string reasoning_summary = 5;
+  bool cached = 6;
+  int64 duration_ms = 7;
+}
+
+message SearchRequest {
+  string query = 1;
+  int32 top_k = 2;
+}
+
+message SearchResponse { repeated SearchHit hits = 1; }
+
+message SearchHit {
+  string content = 1;
+  string source = 2;
+  int32 page = 3;
+  double score = 4;
+}
+
+message Source {
+  string source = 1;
+  string title = 2;
+  string url = 3;
+  string type = 4;
+  int32 page = 5;
+  double score = 6;
+}
+
+message IndexDocumentRequest {
+  string document_id = 1;
+  string operation = 2;
+  string source = 3;
+  string file_path = 4;
+}
+
+message IndexDocumentResponse {
+  bool success = 1;
+  string message = 2;
+  int32 chunks = 3;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+  string vector_store = 2;
+  int64 chunks = 3;
+}
