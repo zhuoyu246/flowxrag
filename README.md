@@ -13,6 +13,8 @@
 
 ## 架构概览
 
+可编辑架构图：[ragflowx-architecture.drawio](docs/images/ragflowx-architecture.drawio)。
+
 ```text
 Streamlit UI → Go Gateway (Gin) → gRPC → Python RAG Service → FAISS
                     │                         │
